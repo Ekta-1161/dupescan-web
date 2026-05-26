@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeDupScan — Remove Duplicates from PDF, Excel & ZIP</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07090f;--s1:#0d1120;--s2:#111827;--s3:#1a2236;
+  --border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.13);
+  --text:#e2e8f8;--muted:#5a6690;--faint:#222d48;
+  --accent:#4285f4;--a2:#1a3670;
+  --amber:#f0a030;--amberDim:#2e1e00;
+  --red:#e84040;--redDim:#2e0d0d;
+  --green:#34d472;--greenDim:#062414;
+  --syne:'Syne',sans-serif;--mono:'DM Mono',monospace;--sans:'DM Sans',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;min-height:100vh;overflow-x:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(66,133,244,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(66,133,244,.025) 1px,transparent 1px);background-size:52px 52px;pointer-events:none;z-index:0}
+
+/* NAV */
+nav{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:.85rem 2rem;background:rgba(7,9,15,.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--border)}
+.logo{font-family:var(--syne);font-size:17px;font-weight:800}
+.logo span{color:var(--accent)}
+.nav-pills{display:flex;gap:8px}
+.pill{font-family:var(--mono);font-size:10px;padding:4px 11px;border-radius:20px;border:1px solid var(--border2);color:var(--muted);letter-spacing:.06em}
+.pill.green{border-color:rgba(52,212,114,.3);color:var(--green);background:rgba(6,36,20,.6)}
+
+/* HERO */
+.hero{position:relative;z-index:1;text-align:center;padding:4rem 1.5rem 2rem}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:1.25rem;padding:5px 14px;border:1px solid rgba(66,133,244,.25);border-radius:20px;background:rgba(66,133,244,.06)}
+.eyebrow::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+h1{font-family:var(--syne);font-size:clamp(28px,5vw,56px);font-weight:800;line-height:1.06;letter-spacing:-.03em;margin-bottom:.9rem}
+h1 em{font-style:normal;color:var(--muted);font-weight:400}
+.hero-sub{font-size:15px;color:var(--muted);max-width:540px;margin:0 auto 2rem;line-height:1.7}
+
+/* MODE CARDS */
+.modes{position:relative;z-index:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;max-width:720px;margin:0 auto 2.5rem;padding:0 1.5rem}
+.mode-card{background:var(--s1);border:1.5px solid var(--border);border-radius:12px;padding:1.1rem 1.2rem;cursor:pointer;transition:all .18s;text-align:left}
+.mode-card:hover{border-color:var(--border2);background:var(--s2)}
+.mode-card.active{border-color:var(--accent);background:var(--a2)}
+.mode-icon{font-size:24px;margin-bottom:.55rem}
+.mode-title{font-family:var(--syne);font-size:14px;font-weight:700;margin-bottom:.25rem}
+.mode-desc{font-size:12px;color:var(--muted);line-height:1.55}
+.mode-tag{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:20px;margin-top:.5rem;border:1px solid}
+.mode-card:nth-child(1) .mode-tag{background:rgba(46,14,14,.5);color:#e05252;border-color:rgba(224,82,82,.3)}
+.mode-card:nth-child(2) .mode-tag{background:rgba(6,34,22,.5);color:#34d472;border-color:rgba(52,212,114,.3)}
+.mode-card:nth-child(3) .mode-tag{background:var(--a2);color:var(--accent);border-color:rgba(66,133,244,.3)}
+
+/* UPLOAD */
+.upload-wrap{position:relative;z-index:1;max-width:640px;margin:0 auto;padding:0 1.5rem 2.5rem}
+.drop-zone{border:1.5px dashed var(--faint);border-radius:18px;padding:2.75rem 2rem;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;background:var(--s1);position:relative;overflow:hidden}
+.drop-zone::after{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 70% 50% at 50% 110%,rgba(66,133,244,.07),transparent);pointer-events:none}
+.drop-zone:hover,.drop-zone.over{border-color:var(--accent);background:rgba(66,133,244,.04)}
+.drop-zone input{display:none}
+.drop-ico{width:56px;height:56px;border-radius:14px;background:var(--a2);border:1px solid rgba(66,133,244,.3);display:flex;align-items:center;justify-content:center;margin:0 auto 1rem;font-size:22px}
+.drop-title{font-family:var(--syne);font-size:17px;font-weight:700;margin-bottom:.4rem}
+.drop-sub{font-size:13px;color:var(--muted);line-height:1.65;margin-bottom:1.5rem}
+.btn-row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.btn{font-family:var(--sans);font-size:13px;font-weight:500;padding:9px 22px;border-radius:8px;border:none;cursor:pointer;transition:all .15s}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:#5a9eff}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.upload-note{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:1rem}
+
+/* PROGRESS */
+.prog-wrap{margin-top:1.25rem;display:none}
+.prog-labels{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:.4rem}
+.prog-track{height:3px;background:var(--faint);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;background:var(--accent);border-radius:2px;width:0;transition:width .35s}
+
+/* RESULTS */
+.results{position:relative;z-index:1;max-width:840px;margin:0 auto;padding:0 1.5rem 5rem;display:none}
+
+/* Stats */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:11px;margin-bottom:1.6rem}
+.stat{background:var(--s1);border:1px solid var(--border);border-radius:12px;padding:.95rem 1.1rem}
+.stat.danger{border-color:rgba(232,64,64,.3);background:rgba(46,13,13,.4)}
+.stat.ok    {border-color:rgba(52,212,114,.3);background:rgba(6,36,20,.4)}
+.stat.amber {border-color:rgba(240,160,48,.3);background:rgba(46,30,0,.4)}
+.stat-label{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem}
+.stat-val{font-family:var(--syne);font-size:24px;font-weight:800;line-height:1.1;word-break:break-word}
+.stat.danger .stat-val{color:var(--red)}
+.stat.ok .stat-val{color:var(--green)}
+.stat.amber .stat-val{color:var(--amber);font-size:15px}
+
+/* Download grid */
+.dl-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:1.5rem}
+@media(max-width:540px){.dl-grid{grid-template-columns:1fr}}
+.dl-card{border-radius:14px;padding:1.3rem 1.4rem;display:flex;flex-direction:column;gap:10px}
+.dl-card.clean{background:var(--greenDim);border:1.5px solid rgba(52,212,114,.3)}
+.dl-card.dups {background:var(--redDim); border:1.5px solid rgba(232,64,64,.3)}
+.dl-card.single{background:var(--greenDim);border:1.5px solid rgba(52,212,114,.3);grid-column:1/-1}
+.dl-card-top{display:flex;align-items:center;gap:10px}
+.dl-card-ico{font-size:28px}
+.dl-card-title{font-family:var(--syne);font-size:15px;font-weight:700}
+.dl-card.clean .dl-card-title,.dl-card.single .dl-card-title{color:var(--green)}
+.dl-card.dups  .dl-card-title{color:var(--red)}
+.dl-card-desc{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.5}
+.dl-meta{font-family:var(--mono);font-size:11px;color:var(--muted);padding:.55rem .75rem;background:rgba(0,0,0,.25);border-radius:7px;line-height:1.8}
+.dl-meta span{display:block}
+.dl-btn{width:100%;padding:10px;border-radius:8px;border:none;cursor:pointer;font-family:var(--syne);font-size:13px;font-weight:700;transition:opacity .15s}
+.dl-btn:hover{opacity:.82}
+.dl-btn:disabled{opacity:.3;cursor:not-allowed}
+.dl-card.clean .dl-btn,.dl-card.single .dl-btn{background:var(--green);color:#07090f}
+.dl-card.dups  .dl-btn{background:var(--red);color:#fff}
+
+/* No dups */
+.no-dups{text-align:center;padding:2.75rem 1.5rem;background:var(--greenDim);border:1.5px solid rgba(52,212,114,.3);border-radius:16px;margin-bottom:1.5rem}
+.no-dups-ico{font-size:42px;margin-bottom:.7rem}
+.no-dups-title{font-family:var(--syne);font-size:17px;font-weight:700;color:var(--green)}
+.no-dups-sub{font-size:13px;color:var(--muted);margin-top:.4rem}
+
+/* Actions */
+.actions-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:1.5rem}
+.act-btn{font-family:var(--mono);font-size:12px;padding:7px 15px;border-radius:7px;border:1px solid var(--border2);background:var(--s2);color:var(--muted);cursor:pointer;transition:all .15s}
+.act-btn:hover{color:var(--text);border-color:var(--accent)}
+
+/* Details / table */
+.details-box{background:var(--s1);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:1rem}
+.details-head{display:flex;align-items:center;justify-content:space-between;padding:.8rem 1.1rem;border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
+.details-head-label{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.details-arrow{font-size:11px;color:var(--muted);transition:transform .2s}
+.details-body{display:none;padding:.85rem 1.1rem}
+.details-body.open{display:block}
+.details-arrow.open{transform:rotate(180deg)}
+
+.sheet-tab{display:inline-block;font-family:var(--mono);font-size:11px;padding:3px 12px;border-radius:20px;background:var(--a2);color:var(--accent);border:1px solid rgba(66,133,244,.3);margin-bottom:.75rem}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:.55rem .85rem;text-align:left;border-bottom:1px solid var(--border2);background:var(--s2)}
+td{padding:.55rem .85rem;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:nth-child(even) td{background:rgba(255,255,255,.012)}
+.badge-dup{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:20px;background:var(--redDim);color:var(--red);border:1px solid rgba(232,64,64,.3)}
+.badge-ok{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:20px;background:var(--greenDim);color:var(--green);border:1px solid rgba(52,212,114,.3)}
+.fname{font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--muted)}
+
+/* Toasts */
+.toasts{position:fixed;bottom:1.5rem;right:1.5rem;display:flex;flex-direction:column;gap:.5rem;z-index:999}
+.toast{padding:.7rem 1.1rem;border-radius:8px;font-family:var(--mono);font-size:12px;border:1px solid;max-width:320px;animation:tIn .2s ease}
+@keyframes tIn{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+.toast.ok {background:var(--greenDim);color:var(--green);border-color:rgba(52,212,114,.3)}
+.toast.err{background:var(--redDim);color:var(--red);border-color:rgba(232,64,64,.3)}
+.toast.inf{background:var(--a2);color:var(--accent);border-color:rgba(66,133,244,.3)}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+.fu{animation:fadeUp .4s ease both}
+.fu1{animation-delay:.1s}.fu2{animation-delay:.2s}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">DeDup<span>Scan</span></div>
+  <div class="nav-pills">
+    <span class="pill green">● Runs locally</span>
+    <span class="pill">PDF · Excel · CSV · ZIP</span>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="eyebrow fu">All-in-one Duplicate Remover</div>
+  <h1 class="fu fu1">Remove duplicates<br><em>from any file</em></h1>
+  <p class="hero-sub fu">Upload a PDF, Excel, CSV, or ZIP folder — duplicate pages, rows, and files are detected and removed. Download a clean version instantly.</p>
+</section>
+
+<!-- Mode selector -->
+<div class="modes" id="modeCards">
+  <div class="mode-card active" onclick="selectMode('pdf')" id="mode-pdf">
+    <div class="mode-icon">📄</div>
+    <div class="mode-title">PDF</div>
+    <div class="mode-desc">Removes duplicate pages. Downloads a clean PDF with only unique pages.</div>
+    <span class="mode-tag">Duplicate pages</span>
+  </div>
+  <div class="mode-card" onclick="selectMode('excel')" id="mode-excel">
+    <div class="mode-icon">📊</div>
+    <div class="mode-title">Excel / CSV</div>
+    <div class="mode-desc">Removes duplicate rows across all sheets. Downloads a clean file.</div>
+    <span class="mode-tag">Duplicate rows</span>
+  </div>
+  <div class="mode-card" onclick="selectMode('zip')" id="mode-zip">
+    <div class="mode-icon">📁</div>
+    <div class="mode-title">Folder / ZIP</div>
+    <div class="mode-desc">Finds files with identical content. Downloads clean ZIP + duplicates ZIP.</div>
+    <span class="mode-tag">Duplicate files</span>
+  </div>
+</div>
+
+<!-- Upload zone -->
+<div class="upload-wrap">
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-ico" id="dropIco">📄</div>
+    <div class="drop-title" id="dropTitle">Drop your PDF here</div>
+    <div class="drop-sub" id="dropSub">Upload a PDF file to remove duplicate pages.<br>Processed locally — files never leave your computer.</div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="chooseBtn" onclick="document.getElementById('fileIn').click()">Choose PDF file</button>
+    </div>
+    <input type="file" id="fileIn" accept=".pdf">
+    <div class="upload-note">Runs on your computer · No internet needed · Max 500 MB</div>
+  </div>
+  <div class="prog-wrap" id="progWrap">
+    <div class="prog-labels"><span id="progLabel">Processing…</span><span id="progPct">0%</span></div>
+    <div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+  </div>
+</div>
+
+<!-- Results -->
+<div class="results" id="resultsSection">
+  <div class="stats-grid" id="statsGrid"></div>
+  <div id="downloadCards"></div>
+  <div class="actions-bar">
+    <button class="act-btn" onclick="dlReport()">⬇ Export report (.txt)</button>
+    <div style="flex:1"></div>
+    <button class="act-btn" onclick="resetAll()">↺ Process another file</button>
+  </div>
+  <div id="detailsArea"></div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+let currentMode   = 'pdf';
+let currentResult = null;
+
+// ── Mode selector ─────────────────────────────────────────────────────────────
+const modeConfig = {
+  pdf: {
+    icon: '📄', title: 'Drop your PDF here',
+    sub: 'Upload a PDF file to remove duplicate pages.\nProcessed locally — files never leave your computer.',
+    btnLabel: 'Choose PDF file', accept: '.pdf'
+  },
+  excel: {
+    icon: '📊', title: 'Drop your Excel or CSV here',
+    sub: 'Upload an Excel (.xlsx, .xls, .xlsm) or CSV file to remove duplicate rows.\nProcessed locally — files never leave your computer.',
+    btnLabel: 'Choose Excel / CSV file', accept: '.xlsx,.xls,.xlsm,.csv'
+  },
+  zip: {
+    icon: '📁', title: 'Drop your ZIP file here',
+    sub: 'Upload a ZIP archive (your folder zipped) to find and remove duplicate files.\nProcessed locally — files never leave your computer.',
+    btnLabel: 'Choose ZIP file', accept: '.zip'
+  }
+};
+
+function selectMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('active'));
+  document.getElementById('mode-' + mode).classList.add('active');
+  const cfg = modeConfig[mode];
+  document.getElementById('dropIco').textContent   = cfg.icon;
+  document.getElementById('dropTitle').textContent = cfg.title;
+  document.getElementById('dropSub').textContent   = cfg.sub;
+  document.getElementById('chooseBtn').textContent = cfg.btnLabel;
+  document.getElementById('fileIn').accept         = cfg.accept;
+  resetAll(false);
+}
+
+// ── Drag / drop ───────────────────────────────────────────────────────────────
+const dz = document.getElementById('dropZone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('over');
+  const f = e.dataTransfer.files[0];
+  if (f) upload(f);
+});
+document.getElementById('fileIn').addEventListener('change', e => {
+  if (e.target.files[0]) upload(e.target.files[0]);
+});
+
+// ── Upload ────────────────────────────────────────────────────────────────────
+function setProgress(pct, label) {
+  document.getElementById('progWrap').style.display = 'block';
+  document.getElementById('progFill').style.width   = pct + '%';
+  document.getElementById('progPct').textContent    = pct + '%';
+  if (label) document.getElementById('progLabel').textContent = label;
+}
+function hideProgress() { document.getElementById('progWrap').style.display = 'none'; }
+
+async function upload(file) {
+  setProgress(20, `Uploading ${file.name}…`);
+  document.getElementById('resultsSection').style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    setProgress(55, 'Scanning for duplicates…');
+    const res  = await fetch('/api/process', { method: 'POST', body: fd });
+    const data = await res.json();
+    setProgress(100, 'Done!');
+    if (data.error) { toast(data.error, 'err'); hideProgress(); return; }
+    setTimeout(hideProgress, 500);
+    currentResult = data;
+    showResults(data);
+  } catch(e) {
+    toast('Request failed. Is Flask running?  python app.py', 'err');
+    hideProgress();
+  }
+}
+
+// ── Show results ──────────────────────────────────────────────────────────────
+function showResults(d) {
+  document.getElementById('resultsSection').style.display = 'block';
+
+  if (d.mode === 'pdf')   renderPDF(d);
+  if (d.mode === 'excel') renderExcel(d);
+  if (d.mode === 'zip')   renderZIP(d);
+
+  window.scrollTo({ top: document.getElementById('resultsSection').offsetTop - 80, behavior: 'smooth' });
+}
+
+// ── PDF results ───────────────────────────────────────────────────────────────
+function renderPDF(d) {
+  const hasDups = d.duplicate_pages > 0;
+
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat"><div class="stat-label">File</div><div class="stat-val" style="font-size:13px">${d.filename}</div></div>
+    <div class="stat"><div class="stat-label">Total pages</div><div class="stat-val">${d.total_pages}</div></div>
+    <div class="stat ok"><div class="stat-label">Unique pages kept</div><div class="stat-val">${d.kept_pages}</div></div>
+    <div class="stat ${hasDups?'danger':'ok'}"><div class="stat-label">Duplicate pages</div><div class="stat-val">${d.duplicate_pages}</div></div>
+    <div class="stat amber"><div class="stat-label">Size</div><div class="stat-val">${d.original_size_fmt} → ${d.clean_size_fmt}</div></div>
+  `;
+
+  if (!hasDups) {
+    document.getElementById('downloadCards').innerHTML = noDupsHTML('pages', d.filename);
+    document.getElementById('detailsArea').innerHTML = '';
+    return;
+  }
+
+  document.getElementById('downloadCards').innerHTML = `
+    <div class="dl-grid">
+      <div class="dl-card single">
+        <div class="dl-card-top"><div class="dl-card-ico">📄</div>
+          <div><div class="dl-card-title">Clean PDF ready</div>
+          <div class="dl-card-desc">${d.duplicate_pages} duplicate page${d.duplicate_pages!==1?'s':''} removed</div></div>
+        </div>
+        <div class="dl-meta">
+          <span>📄 ${d.kept_pages} unique page${d.kept_pages!==1?'s':''} kept</span>
+          <span>🗑️ ${d.duplicate_pages} duplicate page${d.duplicate_pages!==1?'s':''} removed</span>
+          <span>💾 ${d.original_size_fmt} → ${d.clean_size_fmt}</span>
+        </div>
+        <button class="dl-btn" onclick="downloadClean()">⬇ Download clean PDF</button>
+      </div>
+    </div>`;
+
+  // Details table
+  const rows = d.dup_details.map(r =>
+    `<tr><td><span class="badge-dup">Page ${r.duplicate_page}</span></td>
+     <td><span class="badge-ok">Page ${r.original_page}</span></td>
+     <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed</td></tr>`
+  ).join('');
+
+  document.getElementById('detailsArea').innerHTML = collapsible(
+    `Duplicate pages detail (${d.dup_details.length})`,
+    `<table><thead><tr><th>Duplicate Page</th><th>Copy of</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`
+  );
+}
+
+// ── Excel results ─────────────────────────────────────────────────────────────
+function renderExcel(d) {
+  const hasDups   = d.duplicate_rows > 0;
+  const hasWithin = (d.within_dup_total || 0) > 0;
+  const hasCross  = (d.cross_dup_total  || 0) > 0;
+  const multiSheet = (d.sheets || []).length > 1;
+
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat"><div class="stat-label">File</div><div class="stat-val" style="font-size:13px">${d.filename}</div></div>
+    <div class="stat"><div class="stat-label">Total rows</div><div class="stat-val">${d.total_rows}</div></div>
+    <div class="stat ok"><div class="stat-label">Unique rows kept</div><div class="stat-val">${d.kept_rows}</div></div>
+    <div class="stat ${hasDups?'danger':'ok'}"><div class="stat-label">Total duplicates</div><div class="stat-val">${d.duplicate_rows}</div></div>
+    <div class="stat ${hasWithin?'danger':'ok'}"><div class="stat-label">Within-sheet dups</div><div class="stat-val">${d.within_dup_total||0}</div></div>
+    ${multiSheet ? `<div class="stat ${hasCross?'danger':'ok'}"><div class="stat-label">Cross-sheet dups</div><div class="stat-val">${d.cross_dup_total||0}</div></div>` : ''}
+    <div class="stat amber"><div class="stat-label">Size</div><div class="stat-val">${d.original_size_fmt} → ${d.clean_size_fmt}</div></div>
+  `;
+
+  if (!hasDups) {
+    document.getElementById('downloadCards').innerHTML = noDupsHTML('rows', d.filename);
+    document.getElementById('detailsArea').innerHTML = '';
+    return;
+  }
+
+  const withinLine = hasWithin ? `<span>📋 ${d.within_dup_total} duplicate${d.within_dup_total!==1?'s':''} within same sheet</span>` : '';
+  const crossLine  = hasCross  ? `<span>🔀 ${d.cross_dup_total} duplicate${d.cross_dup_total!==1?'s':''} across different sheets</span>` : '';
+
+  document.getElementById('downloadCards').innerHTML = `
+    <div class="dl-grid">
+      <div class="dl-card single">
+        <div class="dl-card-top"><div class="dl-card-ico">📊</div>
+          <div><div class="dl-card-title">Clean file ready</div>
+          <div class="dl-card-desc">${d.duplicate_rows} duplicate row${d.duplicate_rows!==1?'s':''} removed</div></div>
+        </div>
+        <div class="dl-meta">
+          <span>✅ ${d.kept_rows} unique row${d.kept_rows!==1?'s':''} kept</span>
+          ${withinLine}${crossLine}
+          <span>💾 ${d.original_size_fmt} → ${d.clean_size_fmt}</span>
+        </div>
+        <button class="dl-btn" onclick="downloadClean()">⬇ Download clean file</button>
+      </div>
+    </div>`;
+
+  // ── Within-sheet details ──────────────────────────────────────────────────
+  let detailsHtml = '';
+
+  if (hasWithin) {
+    const sheetsHtml = (d.sheets || []).filter(s => s.within_dup_rows > 0).map(s => {
+      const rows = (s.within_dup_details || []).map(r =>
+        `<tr>
+          <td><span class="badge-dup">Row ${r.duplicate_row}</span></td>
+          <td><span class="badge-ok">Row ${r.original_row}</span></td>
+          <td style="font-family:var(--mono);font-size:11px;color:var(--muted)">${s.sheet}</td>
+          <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed</td>
+        </tr>`
+      ).join('');
+      return `<div class="sheet-tab">Sheet: ${s.sheet} — ${s.within_dup_rows} within-sheet duplicate${s.within_dup_rows!==1?'s':''}</div>
+        <table><thead><tr><th>Duplicate Row</th><th>Copy of Row</th><th>Sheet</th><th>Action</th></tr></thead>
+        <tbody>${rows}</tbody></table><br>`;
+    }).join('');
+
+    detailsHtml += collapsible(
+      `Within-sheet duplicates (${d.within_dup_total})`, sheetsHtml
+    );
+  }
+
+  // ── Cross-sheet details ───────────────────────────────────────────────────
+  if (hasCross && multiSheet) {
+    const crossRows = (d.cross_details || []).map(r =>
+      `<tr>
+        <td><span class="badge-dup">${r.duplicate_sheet} — Row ${r.duplicate_row}</span></td>
+        <td><span class="badge-ok">${r.original_sheet} — Row ${r.original_row}</span></td>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed</td>
+      </tr>`
+    ).join('');
+
+    detailsHtml += collapsible(
+      `Cross-sheet duplicates (${d.cross_dup_total}) — same row found in multiple sheets`,
+      `<table><thead><tr><th>Duplicate (Sheet — Row)</th><th>Original (Sheet — Row)</th><th>Action</th></tr></thead>
+       <tbody>${crossRows}</tbody></table>`
+    );
+  }
+
+  document.getElementById('detailsArea').innerHTML = detailsHtml;
+}
+
+// ── ZIP results ───────────────────────────────────────────────────────────────
+function renderZIP(d) {
+  const hasExact  = (d.duplicate_files   || 0) > 0;
+  const hasCross  = (d.cross_file_count  || 0) > 0;
+  const hasAny    = hasExact || hasCross;
+
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat"><div class="stat-label">File</div><div class="stat-val" style="font-size:13px">${d.filename}</div></div>
+    <div class="stat"><div class="stat-label">Total files</div><div class="stat-val">${d.total_files}</div></div>
+    <div class="stat ok"><div class="stat-label">Unique files</div><div class="stat-val">${d.unique_files}</div></div>
+    <div class="stat ${hasExact?'danger':'ok'}"><div class="stat-label">Exact duplicates</div><div class="stat-val">${d.duplicate_files||0}</div></div>
+    <div class="stat ${hasCross?'danger':'ok'}"><div class="stat-label">Cross-file matches</div><div class="stat-val">${d.cross_file_count||0}</div></div>
+    <div class="stat amber"><div class="stat-label">Space recovered</div><div class="stat-val">${d.wasted_fmt||'0 B'}</div></div>
+  `;
+
+  if (!hasAny) {
+    document.getElementById('downloadCards').innerHTML = noDupsHTML('files', d.filename);
+    document.getElementById('detailsArea').innerHTML = '';
+    return;
+  }
+
+  document.getElementById('downloadCards').innerHTML = `
+    <div class="dl-grid">
+      <div class="dl-card clean">
+        <div class="dl-card-top"><div class="dl-card-ico">✅</div>
+          <div><div class="dl-card-title">Clean ZIP</div>
+          <div class="dl-card-desc">Unique files only — exact duplicates removed</div></div>
+        </div>
+        <div class="dl-meta">
+          <span>📄 ${d.unique_files} unique file${d.unique_files!==1?'s':''}</span>
+          <span>💾 ${d.clean_size_fmt}</span>
+          ${hasCross ? `<span>⚠️ ${d.cross_file_count} cross-file content matches found (see details below)</span>` : ''}
+        </div>
+        <button class="dl-btn" onclick="downloadClean()">⬇ Download clean_files.zip</button>
+      </div>
+      <div class="dl-card dups">
+        <div class="dl-card-top"><div class="dl-card-ico">🗂️</div>
+          <div><div class="dl-card-title">Duplicate Files ZIP</div>
+          <div class="dl-card-desc">Exact file copies only</div></div>
+        </div>
+        <div class="dl-meta">
+          <span>📄 ${d.duplicate_files||0} exact duplicate file${d.duplicate_files!==1?'s':''}</span>
+          <span>💾 ${d.wasted_fmt||'0 B'} wasted</span>
+          <span>🗑️ Safe to delete</span>
+        </div>
+        <button class="dl-btn" onclick="downloadDups()" ${!hasExact?'disabled':''}>⬇ Download duplicate_files.zip</button>
+      </div>
+    </div>`;
+
+  let detailsHtml = '';
+
+  // ── Exact file duplicates table ───────────────────────────────────────────
+  if (hasExact) {
+    const exactRows = (d.exact_dups || []).map(r => `
+      <tr>
+        <td class="fname">${r.duplicate_file}</td>
+        <td class="fname" style="color:var(--green)">${r.original_file}</td>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed from clean ZIP</td>
+      </tr>`).join('');
+    detailsHtml += collapsible(
+      `Exact duplicate files (${d.duplicate_files})`,
+      `<table><thead><tr><th>Duplicate File</th><th>Copy of</th><th>Action</th></tr></thead>
+       <tbody>${exactRows}</tbody></table>`
+    );
+  }
+
+  // ── Cross-file content matches table ──────────────────────────────────────
+  if (hasCross) {
+    const typeIcon = t => t === 'pdf' ? '📄' : '📊';
+    const crossRows = (d.cross_file_dups || []).map(r => `
+      <tr>
+        <td>
+          <span style="font-family:var(--mono);font-size:11px;color:var(--red)">${typeIcon(r.dup_type)} ${r.dup_file}</span><br>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">${r.dup_label}</span>
+        </td>
+        <td>
+          <span style="font-family:var(--mono);font-size:11px;color:var(--green)">${typeIcon(r.orig_type)} ${r.orig_file}</span><br>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">${r.orig_label}</span>
+        </td>
+        <td style="font-family:var(--mono);font-size:10px;color:var(--muted);max-width:200px;word-break:break-word">${r.preview}…</td>
+      </tr>`).join('');
+    detailsHtml += collapsible(
+      `Cross-file content matches — PDF ↔ Excel (${d.cross_file_count})`,
+      `<p style="font-size:12px;color:var(--muted);margin-bottom:.75rem">
+        These entries have the same text content across different file types.
+        They are <strong>not</strong> removed automatically — review manually.
+       </p>
+       <table><thead><tr><th>Duplicate (File — Location)</th><th>Matches (File — Location)</th><th>Content preview</th></tr></thead>
+       <tbody>${crossRows}</tbody></table>`
+    );
+  }
+
+  document.getElementById('detailsArea').innerHTML = detailsHtml;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function noDupsHTML(unit, filename) {
+  return `<div class="no-dups">
+    <div class="no-dups-ico">✅</div>
+    <div class="no-dups-title">No duplicate ${unit} found!</div>
+    <div class="no-dups-sub">All ${unit} in <strong>${filename}</strong> are unique. No changes needed.</div>
+  </div>`;
+}
+
+let detailOpen = false;
+function collapsible(label, bodyHtml) {
+  return `<div class="details-box">
+    <div class="details-head" onclick="toggleDetails(this)">
+      <span class="details-head-label">▼ ${label}</span>
+      <span class="details-arrow">▼</span>
+    </div>
+    <div class="details-body">${bodyHtml}</div>
+  </div>`;
+}
+function toggleDetails(headEl) {
+  const body  = headEl.nextElementSibling;
+  const arrow = headEl.querySelector('.details-arrow');
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+
+// ── Downloads ─────────────────────────────────────────────────────────────────
+function downloadClean() {
+  if (!currentResult?.session_id) return;
+  toast('Preparing download…', 'inf');
+  window.location.href = `/api/download/${currentResult.session_id}`;
+}
+function downloadDups() {
+  if (!currentResult?.session_id) return;
+  toast('Preparing duplicates ZIP…', 'inf');
+  window.location.href = `/api/download-dups/${currentResult.session_id}`;
+}
+
+function dlReport() {
+  if (!currentResult) return;
+  const d = currentResult;
+  const lines = ['DeDupScan Report', '='.repeat(44), '',
+    `File     : ${d.filename}`, `Mode     : ${d.mode.toUpperCase()}`,
+    `Original : ${d.original_size_fmt}`, `Clean    : ${d.clean_size_fmt}`, ''];
+
+  if (d.mode === 'pdf') {
+    lines.push(`Total pages    : ${d.total_pages}`, `Kept           : ${d.kept_pages}`, `Removed        : ${d.duplicate_pages}`, '');
+    (d.dup_details||[]).forEach(r => lines.push(`  Page ${r.duplicate_page} → copy of Page ${r.original_page}`));
+  } else if (d.mode === 'excel') {
+    lines.push(`Total rows : ${d.total_rows}`, `Kept       : ${d.kept_rows}`, `Removed    : ${d.duplicate_rows}`, '');
+    (d.sheets||[]).forEach(s => {
+      if (!s.duplicate_rows) return;
+      lines.push(`Sheet: ${s.sheet}`);
+      (s.dup_details||[]).forEach(r => lines.push(`  Row ${r.duplicate_row} → copy of Row ${r.original_row}`));
+    });
+  } else if (d.mode === 'zip') {
+    lines.push(`Total files : ${d.total_files}`, `Unique kept : ${d.unique_files}`, `Removed     : ${d.duplicate_files}`, '');
+    (d.dup_details||[]).forEach(r => lines.push(`  ${r.duplicate_file}  →  copy of  ${r.original_file}`));
+  }
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain' }));
+  a.download = 'dedupscan-report.txt'; a.click();
+  toast('Report downloaded.', 'ok');
+}
+
+function resetAll(scrollUp = true) {
+  currentResult = null;
+  document.getElementById('resultsSection').style.display = 'none';
+  document.getElementById('fileIn').value = '';
+  if (scrollUp) window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function toast(msg, type = 'inf') {
+  const w  = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`; el.textContent = msg;
+  w.appendChild(el); setTimeout(() => el.remove(), 4000);
+}
+</script>
+</body>
+</html>
