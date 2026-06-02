@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DeDupScan — Remove Duplicates from PDF, Excel & ZIP</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 :root{
   --bg:#07090f;--s1:#0d1120;--s2:#111827;--s3:#1a2236;
@@ -196,11 +197,14 @@ tr:nth-child(even) td{background:rgba(255,255,255,.012)}
     <div class="drop-ico" id="dropIco">📄</div>
     <div class="drop-title" id="dropTitle">Drop your PDF here</div>
     <div class="drop-sub" id="dropSub">Upload a PDF file to remove duplicate pages.<br>Processed locally — files never leave your computer.</div>
-    <div class="btn-row">
+    <div class="btn-row" id="btnRow">
       <button class="btn btn-primary" id="chooseBtn" onclick="document.getElementById('fileIn').click()">Choose PDF file</button>
     </div>
+    <!-- standard single-file input (PDF / Excel / ZIP) -->
     <input type="file" id="fileIn" accept=".pdf">
-    <div class="upload-note">Runs on your computer · No internet needed · Max 500 MB</div>
+    <!-- folder input — shown only in ZIP mode -->
+    <input type="file" id="folderIn" webkitdirectory multiple style="display:none">
+    <div class="upload-note" id="uploadNote">Runs on your computer · No internet needed · Max 1 GB</div>
   </div>
   <div class="prog-wrap" id="progWrap">
     <div class="prog-labels"><span id="progLabel">Processing…</span><span id="progPct">0%</span></div>
@@ -239,8 +243,8 @@ const modeConfig = {
     btnLabel: 'Choose Excel / CSV file', accept: '.xlsx,.xls,.xlsm,.csv'
   },
   zip: {
-    icon: '📁', title: 'Drop your ZIP file here',
-    sub: 'Upload a ZIP archive (your folder zipped) to find and remove duplicate files.\nProcessed locally — files never leave your computer.',
+    icon: '📁', title: 'Drop a folder or ZIP here',
+    sub: 'Select a folder OR upload a ZIP archive. Duplicate files are found and removed.\nProcessed locally — files never leave your computer.',
     btnLabel: 'Choose ZIP file', accept: '.zip'
   }
 };
@@ -255,6 +259,23 @@ function selectMode(mode) {
   document.getElementById('dropSub').textContent   = cfg.sub;
   document.getElementById('chooseBtn').textContent = cfg.btnLabel;
   document.getElementById('fileIn').accept         = cfg.accept;
+
+  // In ZIP mode show extra "Select Folder" button; hide it for other modes
+  const btnRow     = document.getElementById('btnRow');
+  const folderBtn  = document.getElementById('folderBtn');
+  if (mode === 'zip') {
+    if (!folderBtn) {
+      const btn = document.createElement('button');
+      btn.id        = 'folderBtn';
+      btn.className = 'btn btn-outline';
+      btn.textContent = '📂 Select Folder';
+      btn.onclick   = () => document.getElementById('folderIn').click();
+      btnRow.appendChild(btn);
+    }
+  } else {
+    if (folderBtn) folderBtn.remove();
+  }
+
   resetAll(false);
 }
 
@@ -262,14 +283,87 @@ function selectMode(mode) {
 const dz = document.getElementById('dropZone');
 dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
 dz.addEventListener('dragleave', () => dz.classList.remove('over'));
-dz.addEventListener('drop', e => {
+dz.addEventListener('drop', async e => {
   e.preventDefault(); dz.classList.remove('over');
-  const f = e.dataTransfer.files[0];
-  if (f) upload(f);
+  if (currentMode !== 'zip') {
+    const f = e.dataTransfer.files[0];
+    if (f) upload(f);
+    return;
+  }
+  // ZIP mode: accept dropped ZIP file or dropped folder contents
+  const items = [...(e.dataTransfer.items || [])];
+  const files = [...e.dataTransfer.files];
+  // Check if it's a folder drop (items with webkitGetAsEntry)
+  const hasFolder = items.some(i => i.webkitGetAsEntry && i.webkitGetAsEntry()?.isDirectory);
+  if (hasFolder) {
+    // Collect all files from dropped folder entries
+    const allFiles = [];
+    const queue = items.map(i => i.webkitGetAsEntry()).filter(Boolean);
+    await collectEntries(queue, allFiles);
+    if (allFiles.length) uploadFolderFiles(allFiles);
+  } else if (files.length === 1 && files[0].name.toLowerCase().endsWith('.zip')) {
+    upload(files[0]);
+  } else if (files.length > 1) {
+    // Multiple files dropped — treat as folder contents
+    uploadFolderFiles(files);
+  } else if (files.length === 1) {
+    upload(files[0]);
+  }
 });
+
+// Collect files recursively from DataTransferEntry tree
+async function collectEntries(entries, result) {
+  for (const entry of entries) {
+    if (!entry) continue;
+    if (entry.isFile) {
+      await new Promise(res => entry.file(f => { result.push(f); res(); }));
+    } else if (entry.isDirectory) {
+      await new Promise(res => {
+        entry.createReader().readEntries(async subEntries => {
+          await collectEntries(subEntries, result);
+          res();
+        });
+      });
+    }
+  }
+}
+
 document.getElementById('fileIn').addEventListener('change', e => {
   if (e.target.files[0]) upload(e.target.files[0]);
 });
+
+// Folder input — zips all selected files in JS then uploads
+document.getElementById('folderIn').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  if (files.length) uploadFolderFiles(files);
+});
+
+// Zip an array of File objects in JS, then send to /api/process-zip
+async function uploadFolderFiles(files) {
+  setProgress(5, `Zipping ${files.length} files in browser…`);
+  document.getElementById('resultsSection').style.display = 'none';
+  try {
+    const zip = new JSZip();
+    for (const file of files) {
+      const path = file.webkitRelativePath || file.name;
+      zip.file(path, file);
+    }
+    setProgress(20, 'Compressing folder…');
+    const blob = await zip.generateAsync(
+      { type: 'blob', compression: 'STORE' },   // STORE = fast, no compression
+      meta => setProgress(20 + Math.round(meta.percent * 0.25), `Compressing… ${Math.round(meta.percent)}%`)
+    );
+    setProgress(46, 'Uploading to server…');
+    const folderName = files[0].webkitRelativePath
+      ? files[0].webkitRelativePath.split('/')[0]
+      : 'folder';
+    const zipFile = new File([blob], folderName + '.zip', { type: 'application/zip' });
+    upload(zipFile);
+  } catch(err) {
+    toast('Failed to zip folder: ' + err.message, 'err');
+    hideProgress();
+  }
+}
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 function setProgress(pct, label) {
@@ -281,18 +375,35 @@ function setProgress(pct, label) {
 function hideProgress() { document.getElementById('progWrap').style.display = 'none'; }
 
 async function upload(file) {
-  setProgress(20, `Uploading ${file.name}…`);
+  setProgress(5, `Uploading ${file.name}…`);
   document.getElementById('resultsSection').style.display = 'none';
 
   const fd = new FormData();
   fd.append('file', file);
 
+  // ZIP files use async background processing with SSE progress
+  if (currentMode === 'zip') {
+    try {
+      setProgress(8, 'Uploading ZIP to server…');
+      const res  = await fetch('/api/process-zip', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) { toast(data.error, 'err'); hideProgress(); return; }
+      // Now stream progress via SSE
+      streamProgress(data.session_id);
+    } catch(e) {
+      toast('Upload failed. Is Flask running?  python app.py', 'err');
+      hideProgress();
+    }
+    return;
+  }
+
+  // PDF / Excel / CSV — synchronous
   try {
-    setProgress(55, 'Scanning for duplicates…');
+    setProgress(40, 'Scanning for duplicates…');
     const res  = await fetch('/api/process', { method: 'POST', body: fd });
     const data = await res.json();
-    setProgress(100, 'Done!');
     if (data.error) { toast(data.error, 'err'); hideProgress(); return; }
+    setProgress(100, 'Done!');
     setTimeout(hideProgress, 500);
     currentResult = data;
     showResults(data);
@@ -300,6 +411,45 @@ async function upload(file) {
     toast('Request failed. Is Flask running?  python app.py', 'err');
     hideProgress();
   }
+}
+
+function streamProgress(sid) {
+  const evtSource = new EventSource(`/api/progress/${sid}`);
+
+  evtSource.onmessage = async (e) => {
+    const prog = JSON.parse(e.data);
+
+    if (prog.error) {
+      evtSource.close();
+      toast(prog.error, 'err');
+      hideProgress();
+      return;
+    }
+
+    setProgress(prog.pct, prog.label);
+
+    if (prog.done) {
+      evtSource.close();
+      setProgress(100, 'Done! Fetching results…');
+      try {
+        const res  = await fetch(`/api/zip-result/${sid}`);
+        const data = await res.json();
+        if (data.error) { toast(data.error, 'err'); hideProgress(); return; }
+        setTimeout(hideProgress, 400);
+        currentResult = data;
+        showResults(data);
+      } catch(err) {
+        toast('Could not fetch results. Try again.', 'err');
+        hideProgress();
+      }
+    }
+  };
+
+  evtSource.onerror = () => {
+    evtSource.close();
+    toast('Connection lost during processing. Please try again.', 'err');
+    hideProgress();
+  };
 }
 
 // ── Show results ──────────────────────────────────────────────────────────────
