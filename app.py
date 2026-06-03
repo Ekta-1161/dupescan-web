@@ -6,6 +6,8 @@ import re
 import json
 import time
 import threading
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 import pandas as pd
@@ -229,6 +231,72 @@ def process_excel(file_bytes: bytes, filename: str) -> dict:
 # 3. ZIP — background worker (runs in a thread, reports progress via SSE)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _read_entry(args):
+    """Read one ZIP entry; returns (path, data, file_size, hash)."""
+    zin_bytes, entry_filename, entry_file_size = args
+    zin = zipfile.ZipFile(io.BytesIO(zin_bytes))
+    data = zin.read(entry_filename)
+    return entry_filename, data, entry_file_size, hash_bytes(data)
+
+
+def _extract_chunks(args):
+    """Extract content chunks from one file; returns (path, chunks)."""
+    fname, data = args
+    ext = Path(fname).suffix.lower()
+    try:
+        if ext in PDF_EXTS:
+            chunks = extract_pdf_chunks(data, fname)
+        elif ext in EXCEL_EXTS:
+            chunks = extract_excel_chunks(data, fname)
+        else:
+            chunks = []
+    except Exception:
+        chunks = []
+    return fname, chunks
+
+
+def _build_zip_parallel(entries_and_data, compression=zipfile.ZIP_DEFLATED):
+    """Write a ZIP from (ZipInfo, bytes) pairs into an in-memory buffer."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', compression) as zout:
+        for entry, data in entries_and_data:
+            zout.writestr(entry, data)
+    return buf.getvalue()
+
+
+def _detect_subset_files(file_chunks: dict) -> dict:
+    """
+    Returns {subset_path: superset_path} for every file whose entire
+    content-hash set is contained within another file's content-hash set.
+    Files with zero chunks are never marked as subsets.
+    """
+    # Build hash-set per file (only files that have extractable content)
+    hash_sets = {
+        fname: set(c['hash'] for c in chunks)
+        for fname, chunks in file_chunks.items()
+        if chunks
+    }
+
+    # Sort by set size ascending so smaller files are checked first
+    ordered = sorted(hash_sets.items(), key=lambda x: len(x[1]))
+    subset_map = {}   # subset_path -> superset_path
+    seen = list(ordered)
+
+    for i, (fname_a, hashes_a) in enumerate(ordered):
+        if fname_a in subset_map:
+            continue   # already marked as a subset
+        for fname_b, hashes_b in seen:
+            if fname_b == fname_a or fname_b in subset_map:
+                continue
+            if len(hashes_b) <= len(hashes_a):
+                continue   # B is not strictly larger
+            if hashes_a <= hashes_b:   # A ⊆ B
+                subset_map[fname_a] = fname_b
+                break
+
+    return subset_map
+
+
 def process_zip_worker(sid: str, file_bytes: bytes, filename: str):
     try:
         set_progress(sid, 2, 'Opening ZIP…')
@@ -245,101 +313,133 @@ def process_zip_worker(sid: str, file_bytes: bytes, filename: str):
             set_progress(sid, 0, '', done=True, error='ZIP file is empty.')
             return
 
-        set_progress(sid, 5, f'Found {total} files — starting scan…')
+        set_progress(sid, 5, f'Found {total} files — reading in parallel…')
 
-        # ── Pass 1: exact binary duplicates ──────────────────────────────────
-        file_hash_map = {}
-        keep_paths    = set()
-        dup_paths     = set()
-        exact_dups    = []
-        file_data     = {}
+        # ── Pass 1: parallel read + exact-hash dedup ──────────────────────────
+        # Use up to 8 workers; reading from in-memory ZIP is CPU-bound (inflate)
+        MAX_WORKERS = min(8, total)
+        file_data      = {}
+        file_hash_map  = {}   # hash -> first filename
+        keep_paths     = set()
+        dup_paths      = set()
+        exact_dups     = []
+        completed      = 0
+        lock           = threading.Lock()
 
-        for i, entry in enumerate(entries):
-            pct   = 5 + int((i / total) * 35)
-            fname = Path(entry.filename).name
-            set_progress(sid, pct, f'Pass 1/3 — Hashing {i+1}/{total}: {fname}')
+        read_args = [(file_bytes, e.filename, e.file_size) for e in entries]
 
-            data = zin.read(entry.filename)
-            file_data[entry.filename] = data
-            h    = hash_bytes(data)
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {pool.submit(_read_entry, a): a[1] for a in read_args}
+            for fut in as_completed(futures):
+                fname, data, fsize, h = fut.result()
+                with lock:
+                    file_data[fname] = data
+                    completed += 1
+                    if completed % max(1, total // 20) == 0:   # ~20 progress ticks
+                        pct = 5 + int((completed / total) * 33)
+                        set_progress(sid, pct,
+                            f'Pass 1/3 — Hashing {completed}/{total} files…')
+                    if h not in file_hash_map:
+                        file_hash_map[h] = fname
+                        keep_paths.add(fname)
+                    else:
+                        dup_paths.add(fname)
+                        exact_dups.append({
+                            'duplicate_file': fname,
+                            'original_file':  file_hash_map[h],
+                            'size':           fsize,
+                        })
 
-            if h not in file_hash_map:
-                file_hash_map[h] = entry.filename
-                keep_paths.add(entry.filename)
-            else:
-                dup_paths.add(entry.filename)
-                exact_dups.append({
-                    'duplicate_file': entry.filename,
-                    'original_file':  file_hash_map[h],
-                    'size':           entry.file_size,
-                })
+        set_progress(sid, 38,
+            f'Pass 1 done — {len(exact_dups)} exact duplicate(s). Extracting content…')
 
-        set_progress(sid, 40,
-            f'Pass 1 done — {len(exact_dups)} exact duplicate file(s). Scanning content…')
-
-        # ── Pass 2: cross-file content matching ───────────────────────────────
+        # ── Pass 2: parallel content extraction + cross-file chunk dedup ──────
         processable = [
             e for e in entries
             if Path(e.filename).suffix.lower() in (PDF_EXTS | EXCEL_EXTS)
+               and e.filename in keep_paths   # skip already-duped files
         ]
-        proc_total      = len(processable)
-        content_seen    = {}
+        proc_total   = len(processable)
+        file_chunks  = {}   # fname -> [chunk, …]
+        content_seen = {}   # hash  -> first chunk
         cross_file_dups = []
+        completed = 0
 
-        for i, entry in enumerate(processable):
-            fname = entry.filename
-            ext   = Path(fname).suffix.lower()
-            pct   = 40 + int((i / max(proc_total, 1)) * 40)
-            set_progress(sid, pct,
-                f'Pass 2/3 — Reading content {i+1}/{proc_total}: {Path(fname).name}')
+        extract_args = [(e.filename, file_data[e.filename]) for e in processable]
 
-            try:
-                if ext in PDF_EXTS:
-                    chunks = extract_pdf_chunks(file_data[fname], fname)
-                else:
-                    chunks = extract_excel_chunks(file_data[fname], fname)
-            except Exception:
-                chunks = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {pool.submit(_extract_chunks, a): a[0] for a in extract_args}
+            for fut in as_completed(futures):
+                fname, chunks = fut.result()
+                with lock:
+                    file_chunks[fname] = chunks
+                    completed += 1
+                    if completed % max(1, proc_total // 20) == 0:
+                        pct = 38 + int((completed / max(proc_total, 1)) * 30)
+                        set_progress(sid, pct,
+                            f'Pass 2/3 — Extracted {completed}/{proc_total} files…')
+                    for chunk in chunks:
+                        h = chunk['hash']
+                        if h not in content_seen:
+                            content_seen[h] = chunk
+                        elif content_seen[h]['source'] != chunk['source']:
+                            cross_file_dups.append({
+                                'dup_file':   chunk['source'],
+                                'dup_label':  chunk['label'],
+                                'dup_type':   chunk['type'],
+                                'orig_file':  content_seen[h]['source'],
+                                'orig_label': content_seen[h]['label'],
+                                'orig_type':  content_seen[h]['type'],
+                                'preview':    chunk['text'][:120].replace('\n', ' '),
+                            })
 
-            for chunk in chunks:
-                h = chunk['hash']
-                if h not in content_seen:
-                    content_seen[h] = chunk
-                else:
-                    orig = content_seen[h]
-                    if orig['source'] != chunk['source']:
-                        cross_file_dups.append({
-                            'dup_file':   chunk['source'],
-                            'dup_label':  chunk['label'],
-                            'dup_type':   chunk['type'],
-                            'orig_file':  orig['source'],
-                            'orig_label': orig['label'],
-                            'orig_type':  orig['type'],
-                            'preview':    chunk['text'][:120].replace('\n', ' '),
-                        })
+        set_progress(sid, 68,
+            f'Pass 2 done — {len(cross_file_dups)} cross-file match(es). Detecting subset files…')
 
-        set_progress(sid, 82,
-            f'Pass 2 done — {len(cross_file_dups)} cross-file match(es). Building output ZIPs…')
+        # ── Pass 2b: subset / near-duplicate file detection ───────────────────
+        subset_map = _detect_subset_files(file_chunks)   # {subset_path: superset_path}
 
-        # ── Pass 3: build output ZIPs ─────────────────────────────────────────
-        clean_buf = io.BytesIO()
-        with zipfile.ZipFile(clean_buf, 'w', zipfile.ZIP_DEFLATED) as zout:
-            for i, entry in enumerate(entries):
-                set_progress(sid, 82 + int((i / total) * 15),
-                    f'Pass 3/3 — Writing clean ZIP {i+1}/{total}…')
-                if entry.filename in keep_paths:
-                    zout.writestr(entry, file_data[entry.filename])
+        subset_dups = []
+        for sub_path, super_path in subset_map.items():
+            if sub_path in keep_paths:
+                keep_paths.discard(sub_path)
+                dup_paths.add(sub_path)
+                entry_size = next(
+                    (e.file_size for e in entries if e.filename == sub_path), 0
+                )
+                subset_dups.append({
+                    'subset_file':   sub_path,
+                    'superset_file': super_path,
+                    'size':          entry_size,
+                    'reason':        'Content is a subset of superset_file',
+                })
 
-        dup_buf = io.BytesIO()
-        if dup_paths:
-            with zipfile.ZipFile(dup_buf, 'w', zipfile.ZIP_DEFLATED) as zdup:
-                for entry in entries:
-                    if entry.filename in dup_paths:
-                        zdup.writestr(entry, file_data[entry.filename])
+        set_progress(sid, 72,
+            f'Subset check done — {len(subset_dups)} subset file(s) removed. Building ZIPs…')
 
-        wasted = sum(d['size'] for d in exact_dups)
-        clean_bytes = clean_buf.getvalue()
-        dup_bytes   = dup_buf.getvalue()
+        # ── Pass 3: build output ZIPs in parallel ─────────────────────────────
+        entry_map = {e.filename: e for e in entries}
+
+        clean_pairs = [
+            (entry_map[p], file_data[p])
+            for p in keep_paths
+            if p in entry_map
+        ]
+        dup_pairs = [
+            (entry_map[p], file_data[p])
+            for p in dup_paths
+            if p in entry_map
+        ]
+
+        # Build both ZIPs concurrently
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            set_progress(sid, 74, 'Pass 3/3 — Writing clean ZIP…')
+            fut_clean = pool.submit(_build_zip_parallel, clean_pairs)
+            fut_dup   = pool.submit(_build_zip_parallel, dup_pairs)
+            clean_bytes = fut_clean.result()
+            dup_bytes   = fut_dup.result()
+
+        wasted = sum(d['size'] for d in exact_dups) + sum(d['size'] for d in subset_dups)
 
         result_json = {
             'mode':              'zip',
@@ -350,6 +450,8 @@ def process_zip_worker(sid: str, file_bytes: bytes, filename: str):
             'wasted_bytes':      wasted,
             'wasted_fmt':        fmt_bytes(wasted),
             'exact_dups':        exact_dups,
+            'subset_dups':       subset_dups,
+            'subset_count':      len(subset_dups),
             'cross_file_dups':   cross_file_dups[:300],
             'cross_file_count':  len(cross_file_dups),
             'original_size':     len(file_bytes),
