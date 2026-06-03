@@ -204,7 +204,7 @@ tr:nth-child(even) td{background:rgba(255,255,255,.012)}
     <input type="file" id="fileIn" accept=".pdf">
     <!-- folder input — shown only in ZIP mode -->
     <input type="file" id="folderIn" webkitdirectory multiple style="display:none">
-    <div class="upload-note" id="uploadNote">Max 1 GB</div>
+    <div class="upload-note" id="uploadNote">Runs on your computer · No internet needed · Max 1 GB</div>
   </div>
   <div class="prog-wrap" id="progWrap">
     <div class="prog-labels"><span id="progLabel">Processing…</span><span id="progPct">0%</span></div>
@@ -597,16 +597,19 @@ function renderExcel(d) {
 
 // ── ZIP results ───────────────────────────────────────────────────────────────
 function renderZIP(d) {
-  const hasExact  = (d.duplicate_files   || 0) > 0;
-  const hasCross  = (d.cross_file_count  || 0) > 0;
-  const hasAny    = hasExact || hasCross;
+  const hasExact  = (d.duplicate_files  || 0) > 0;
+  const hasSubset = (d.subset_count     || 0) > 0;
+  const hasCross  = (d.cross_file_count || 0) > 0;
+  const hasAny    = hasExact || hasSubset || hasCross;
+  const totalRemoved = (d.duplicate_files || 0) + (d.subset_count || 0);
 
   document.getElementById('statsGrid').innerHTML = `
     <div class="stat"><div class="stat-label">File</div><div class="stat-val" style="font-size:13px">${d.filename}</div></div>
     <div class="stat"><div class="stat-label">Total files</div><div class="stat-val">${d.total_files}</div></div>
-    <div class="stat ok"><div class="stat-label">Unique files</div><div class="stat-val">${d.unique_files}</div></div>
+    <div class="stat ok"><div class="stat-label">Unique files kept</div><div class="stat-val">${d.unique_files}</div></div>
     <div class="stat ${hasExact?'danger':'ok'}"><div class="stat-label">Exact duplicates</div><div class="stat-val">${d.duplicate_files||0}</div></div>
-    <div class="stat ${hasCross?'danger':'ok'}"><div class="stat-label">Cross-file matches</div><div class="stat-val">${d.cross_file_count||0}</div></div>
+    <div class="stat ${hasSubset?'danger':'ok'}"><div class="stat-label">Subset files removed</div><div class="stat-val">${d.subset_count||0}</div></div>
+    <div class="stat ${hasCross?'amber':'ok'}"><div class="stat-label">Cross-file matches</div><div class="stat-val">${d.cross_file_count||0}</div></div>
     <div class="stat amber"><div class="stat-label">Space recovered</div><div class="stat-val">${d.wasted_fmt||'0 B'}</div></div>
   `;
 
@@ -616,31 +619,36 @@ function renderZIP(d) {
     return;
   }
 
+  const subsetLine  = hasSubset ? `<span>🔍 ${d.subset_count} subset file${d.subset_count!==1?'s':''} removed (content contained in another file)</span>` : '';
+  const crossWarn   = hasCross  ? `<span>⚠️ ${d.cross_file_count} cross-file content match${d.cross_file_count!==1?'es':''} found (see details below)</span>` : '';
+
   document.getElementById('downloadCards').innerHTML = `
     <div class="dl-grid">
       <div class="dl-card clean">
         <div class="dl-card-top"><div class="dl-card-ico">✅</div>
           <div><div class="dl-card-title">Clean ZIP</div>
-          <div class="dl-card-desc">Unique files only — exact duplicates removed</div></div>
+          <div class="dl-card-desc">Unique files only — exact duplicates &amp; subset files removed</div></div>
         </div>
         <div class="dl-meta">
-          <span>📄 ${d.unique_files} unique file${d.unique_files!==1?'s':''}</span>
+          <span>📄 ${d.unique_files} unique file${d.unique_files!==1?'s':''} kept</span>
+          <span>🗑️ ${totalRemoved} file${totalRemoved!==1?'s':''} removed (${d.duplicate_files||0} exact + ${d.subset_count||0} subset)</span>
           <span>💾 ${d.clean_size_fmt}</span>
-          ${hasCross ? `<span>⚠️ ${d.cross_file_count} cross-file content matches found (see details below)</span>` : ''}
+          ${crossWarn}
         </div>
         <button class="dl-btn" onclick="downloadClean()">⬇ Download clean_files.zip</button>
       </div>
       <div class="dl-card dups">
         <div class="dl-card-top"><div class="dl-card-ico">🗂️</div>
-          <div><div class="dl-card-title">Duplicate Files ZIP</div>
-          <div class="dl-card-desc">Exact file copies only</div></div>
+          <div><div class="dl-card-title">Removed Files ZIP</div>
+          <div class="dl-card-desc">Exact duplicates + subset files</div></div>
         </div>
         <div class="dl-meta">
           <span>📄 ${d.duplicate_files||0} exact duplicate file${d.duplicate_files!==1?'s':''}</span>
-          <span>💾 ${d.wasted_fmt||'0 B'} wasted</span>
+          ${subsetLine}
+          <span>💾 ${d.wasted_fmt||'0 B'} recovered</span>
           <span>🗑️ Safe to delete</span>
         </div>
-        <button class="dl-btn" onclick="downloadDups()" ${!hasExact?'disabled':''}>⬇ Download duplicate_files.zip</button>
+        <button class="dl-btn" onclick="downloadDups()" ${!hasExact && !hasSubset?'disabled':''}>⬇ Download removed_files.zip</button>
       </div>
     </div>`;
 
@@ -652,12 +660,32 @@ function renderZIP(d) {
       <tr>
         <td class="fname">${r.duplicate_file}</td>
         <td class="fname" style="color:var(--green)">${r.original_file}</td>
-        <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed from clean ZIP</td>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed — identical bytes</td>
       </tr>`).join('');
     detailsHtml += collapsible(
       `Exact duplicate files (${d.duplicate_files})`,
       `<table><thead><tr><th>Duplicate File</th><th>Copy of</th><th>Action</th></tr></thead>
        <tbody>${exactRows}</tbody></table>`
+    );
+  }
+
+  // ── Subset / near-duplicate files table ───────────────────────────────────
+  if (hasSubset) {
+    const subsetRows = (d.subset_dups || []).map(r => `
+      <tr>
+        <td class="fname" style="color:var(--red)">${r.subset_file}</td>
+        <td class="fname" style="color:var(--green)">${r.superset_file}</td>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--muted)">${fmt_bytes_js(r.size)}</td>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed — content subset</td>
+      </tr>`).join('');
+    detailsHtml += collapsible(
+      `Subset files removed (${d.subset_count}) — file A's entire content exists inside file B`,
+      `<p style="font-size:12px;color:var(--muted);margin-bottom:.75rem">
+        Every page / row in the <em>subset file</em> also appears in the <em>superset file</em>.
+        The subset file adds no unique content and has been removed from the clean ZIP.
+       </p>
+       <table><thead><tr><th>Subset File (removed)</th><th>Contained in</th><th>Size saved</th><th>Action</th></tr></thead>
+       <tbody>${subsetRows}</tbody></table>`
     );
   }
 
@@ -679,7 +707,7 @@ function renderZIP(d) {
     detailsHtml += collapsible(
       `Cross-file content matches — PDF ↔ Excel (${d.cross_file_count})`,
       `<p style="font-size:12px;color:var(--muted);margin-bottom:.75rem">
-        These entries have the same text content across different file types.
+        These entries share identical text content across different files.
         They are <strong>not</strong> removed automatically — review manually.
        </p>
        <table><thead><tr><th>Duplicate (File — Location)</th><th>Matches (File — Location)</th><th>Content preview</th></tr></thead>
@@ -688,6 +716,13 @@ function renderZIP(d) {
   }
 
   document.getElementById('detailsArea').innerHTML = detailsHtml;
+}
+
+// JS-side byte formatter (mirrors Python fmt_bytes for subset table)
+function fmt_bytes_js(n) {
+  if (n < 1024)       return n + ' B';
+  if (n < 1024*1024)  return Math.floor(n/1024) + ' KB';
+  return (n/1024/1024).toFixed(1) + ' MB';
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -746,8 +781,18 @@ function dlReport() {
       (s.dup_details||[]).forEach(r => lines.push(`  Row ${r.duplicate_row} → copy of Row ${r.original_row}`));
     });
   } else if (d.mode === 'zip') {
-    lines.push(`Total files : ${d.total_files}`, `Unique kept : ${d.unique_files}`, `Removed     : ${d.duplicate_files}`, '');
-    (d.dup_details||[]).forEach(r => lines.push(`  ${r.duplicate_file}  →  copy of  ${r.original_file}`));
+    const totalRemoved = (d.duplicate_files||0) + (d.subset_count||0);
+    lines.push(`Total files    : ${d.total_files}`, `Unique kept    : ${d.unique_files}`, `Exact dups     : ${d.duplicate_files||0}`, `Subset removed : ${d.subset_count||0}`, `Total removed  : ${totalRemoved}`, `Space saved    : ${d.wasted_fmt||'0 B'}`, '');
+    if ((d.exact_dups||[]).length) {
+      lines.push('-- Exact duplicates --');
+      d.exact_dups.forEach(r => lines.push(`  ${r.duplicate_file}  →  copy of  ${r.original_file}`));
+      lines.push('');
+    }
+    if ((d.subset_dups||[]).length) {
+      lines.push('-- Subset files removed --');
+      d.subset_dups.forEach(r => lines.push(`  ${r.subset_file}  is a subset of  ${r.superset_file}`));
+      lines.push('');
+    }
   }
 
   const a = document.createElement('a');
