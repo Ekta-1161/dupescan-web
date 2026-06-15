@@ -159,14 +159,14 @@ tr:nth-child(even) td{background:rgba(255,255,255,.012)}
   <div class="logo">DeDup<span>Scan</span></div>
   <div class="nav-pills">
     <span class="pill green">● Runs locally</span>
-    <span class="pill">PDF · Excel · CSV · ZIP</span>
+    <span class="pill">PDF · Excel · CSV · DOCX · TXT · ZIP</span>
   </div>
 </nav>
 
 <section class="hero">
   <div class="eyebrow fu">All-in-one Duplicate Remover</div>
   <h1 class="fu fu1">Remove duplicates<br><em>from any file</em></h1>
-  <p class="hero-sub fu">Upload a PDF, Excel, CSV, or ZIP folder — duplicate pages, rows, and files are detected and removed. Download a clean version instantly.</p>
+  <p class="hero-sub fu">Upload a PDF, Excel, CSV, DOCX, TXT, or ZIP folder — duplicate pages, rows, paragraphs, and files are detected and removed. Download a clean version instantly.</p>
 </section>
 
 <!-- Mode selector -->
@@ -183,10 +183,22 @@ tr:nth-child(even) td{background:rgba(255,255,255,.012)}
     <div class="mode-desc">Removes duplicate rows across all sheets. Downloads a clean file.</div>
     <span class="mode-tag">Duplicate rows</span>
   </div>
+  <div class="mode-card" onclick="selectMode('docx')" id="mode-docx">
+    <div class="mode-icon">📝</div>
+    <div class="mode-title">Word / DOCX</div>
+    <div class="mode-desc">Removes duplicate paragraphs inside a Word document. Downloads a clean DOCX.</div>
+    <span class="mode-tag">Duplicate paragraphs</span>
+  </div>
+  <div class="mode-card" onclick="selectMode('txt')" id="mode-txt">
+    <div class="mode-icon">🗒️</div>
+    <div class="mode-title">TXT</div>
+    <div class="mode-desc">Removes duplicate lines inside a plain-text file. Downloads a clean file.</div>
+    <span class="mode-tag">Duplicate lines</span>
+  </div>
   <div class="mode-card" onclick="selectMode('zip')" id="mode-zip">
     <div class="mode-icon">📁</div>
     <div class="mode-title">Folder / ZIP</div>
-    <div class="mode-desc">Finds files with identical content. Downloads clean ZIP + duplicates ZIP.</div>
+    <div class="mode-desc">Finds exact + subset duplicate files across PDF, Excel, DOCX, TXT. Downloads clean ZIP.</div>
     <span class="mode-tag">Duplicate files</span>
   </div>
 </div>
@@ -241,6 +253,16 @@ const modeConfig = {
     icon: '📊', title: 'Drop your Excel or CSV here',
     sub: 'Upload an Excel (.xlsx, .xls, .xlsm) or CSV file to remove duplicate rows.\nProcessed locally — files never leave your computer.',
     btnLabel: 'Choose Excel / CSV file', accept: '.xlsx,.xls,.xlsm,.csv'
+  },
+  docx: {
+    icon: '📝', title: 'Drop your Word document here',
+    sub: 'Upload a DOCX file to remove duplicate paragraphs.\nProcessed locally — files never leave your computer.',
+    btnLabel: 'Choose DOCX file', accept: '.docx,.doc'
+  },
+  txt: {
+    icon: '🗒️', title: 'Drop your text file here',
+    sub: 'Upload a TXT, MD, or LOG file to remove duplicate lines.\nProcessed locally — files never leave your computer.',
+    btnLabel: 'Choose TXT file', accept: '.txt,.text,.md,.log'
   },
   zip: {
     icon: '📁', title: 'Drop a folder or ZIP here',
@@ -458,6 +480,8 @@ function showResults(d) {
 
   if (d.mode === 'pdf')   renderPDF(d);
   if (d.mode === 'excel') renderExcel(d);
+  if (d.mode === 'docx')  renderDOCX(d);
+  if (d.mode === 'txt')   renderTXT(d);
   if (d.mode === 'zip')   renderZIP(d);
 
   window.scrollTo({ top: document.getElementById('resultsSection').offsetTop - 80, behavior: 'smooth' });
@@ -593,6 +617,104 @@ function renderExcel(d) {
   }
 
   document.getElementById('detailsArea').innerHTML = detailsHtml;
+}
+
+// ── DOCX results ──────────────────────────────────────────────────────────────
+function renderDOCX(d) {
+  const hasDups = d.duplicate_paras > 0;
+
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat"><div class="stat-label">File</div><div class="stat-val" style="font-size:13px">${d.filename}</div></div>
+    <div class="stat"><div class="stat-label">Total paragraphs</div><div class="stat-val">${d.total_paras}</div></div>
+    <div class="stat ok"><div class="stat-label">Unique paragraphs kept</div><div class="stat-val">${d.kept_paras}</div></div>
+    <div class="stat ${hasDups?'danger':'ok'}"><div class="stat-label">Duplicate paragraphs</div><div class="stat-val">${d.duplicate_paras}</div></div>
+    <div class="stat amber"><div class="stat-label">Size</div><div class="stat-val">${d.original_size_fmt} → ${d.clean_size_fmt}</div></div>
+  `;
+
+  if (!hasDups) {
+    document.getElementById('downloadCards').innerHTML = noDupsHTML('paragraphs', d.filename);
+    document.getElementById('detailsArea').innerHTML = '';
+    return;
+  }
+
+  document.getElementById('downloadCards').innerHTML = `
+    <div class="dl-grid">
+      <div class="dl-card single">
+        <div class="dl-card-top"><div class="dl-card-ico">📝</div>
+          <div><div class="dl-card-title">Clean DOCX ready</div>
+          <div class="dl-card-desc">${d.duplicate_paras} duplicate paragraph${d.duplicate_paras!==1?'s':''} removed</div></div>
+        </div>
+        <div class="dl-meta">
+          <span>✅ ${d.kept_paras} unique paragraph${d.kept_paras!==1?'s':''} kept</span>
+          <span>🗑️ ${d.duplicate_paras} duplicate paragraph${d.duplicate_paras!==1?'s':''} removed</span>
+          <span>💾 ${d.original_size_fmt} → ${d.clean_size_fmt}</span>
+        </div>
+        <button class="dl-btn" onclick="downloadClean()">⬇ Download clean DOCX</button>
+      </div>
+    </div>`;
+
+  const rows = (d.dup_details||[]).map(r =>
+    `<tr>
+      <td><span class="badge-dup">Para ${r.duplicate_para}</span></td>
+      <td><span class="badge-ok">Para ${r.original_para}</span></td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--muted);max-width:260px;word-break:break-word">${r.preview}…</td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed</td>
+    </tr>`
+  ).join('');
+
+  document.getElementById('detailsArea').innerHTML = collapsible(
+    `Duplicate paragraphs detail (${d.dup_details.length})`,
+    `<table><thead><tr><th>Duplicate Para</th><th>Copy of</th><th>Preview</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`
+  );
+}
+
+// ── TXT results ───────────────────────────────────────────────────────────────
+function renderTXT(d) {
+  const hasDups = d.duplicate_lines > 0;
+
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat"><div class="stat-label">File</div><div class="stat-val" style="font-size:13px">${d.filename}</div></div>
+    <div class="stat"><div class="stat-label">Total lines</div><div class="stat-val">${d.total_lines}</div></div>
+    <div class="stat ok"><div class="stat-label">Unique lines kept</div><div class="stat-val">${d.kept_lines}</div></div>
+    <div class="stat ${hasDups?'danger':'ok'}"><div class="stat-label">Duplicate lines</div><div class="stat-val">${d.duplicate_lines}</div></div>
+    <div class="stat amber"><div class="stat-label">Size</div><div class="stat-val">${d.original_size_fmt} → ${d.clean_size_fmt}</div></div>
+  `;
+
+  if (!hasDups) {
+    document.getElementById('downloadCards').innerHTML = noDupsHTML('lines', d.filename);
+    document.getElementById('detailsArea').innerHTML = '';
+    return;
+  }
+
+  document.getElementById('downloadCards').innerHTML = `
+    <div class="dl-grid">
+      <div class="dl-card single">
+        <div class="dl-card-top"><div class="dl-card-ico">🗒️</div>
+          <div><div class="dl-card-title">Clean file ready</div>
+          <div class="dl-card-desc">${d.duplicate_lines} duplicate line${d.duplicate_lines!==1?'s':''} removed</div></div>
+        </div>
+        <div class="dl-meta">
+          <span>✅ ${d.kept_lines} unique line${d.kept_lines!==1?'s':''} kept</span>
+          <span>🗑️ ${d.duplicate_lines} duplicate line${d.duplicate_lines!==1?'s':''} removed</span>
+          <span>💾 ${d.original_size_fmt} → ${d.clean_size_fmt}</span>
+        </div>
+        <button class="dl-btn" onclick="downloadClean()">⬇ Download clean file</button>
+      </div>
+    </div>`;
+
+  const rows = (d.dup_details||[]).map(r =>
+    `<tr>
+      <td><span class="badge-dup">Line ${r.duplicate_line}</span></td>
+      <td><span class="badge-ok">Line ${r.original_line}</span></td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--muted);max-width:300px;word-break:break-word">${r.preview}</td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--red)">Removed</td>
+    </tr>`
+  ).join('');
+
+  document.getElementById('detailsArea').innerHTML = collapsible(
+    `Duplicate lines detail (${d.dup_details.length})`,
+    `<table><thead><tr><th>Duplicate Line</th><th>Copy of</th><th>Content</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`
+  );
 }
 
 // ── ZIP results ───────────────────────────────────────────────────────────────
@@ -780,6 +902,12 @@ function dlReport() {
       lines.push(`Sheet: ${s.sheet}`);
       (s.dup_details||[]).forEach(r => lines.push(`  Row ${r.duplicate_row} → copy of Row ${r.original_row}`));
     });
+  } else if (d.mode === 'docx') {
+    lines.push(`Total paragraphs : ${d.total_paras}`, `Kept             : ${d.kept_paras}`, `Removed          : ${d.duplicate_paras}`, '');
+    (d.dup_details||[]).forEach(r => lines.push(`  Para ${r.duplicate_para} → copy of Para ${r.original_para}  "${r.preview}"`));
+  } else if (d.mode === 'txt') {
+    lines.push(`Total lines : ${d.total_lines}`, `Kept        : ${d.kept_lines}`, `Removed     : ${d.duplicate_lines}`, '');
+    (d.dup_details||[]).forEach(r => lines.push(`  Line ${r.duplicate_line} → copy of Line ${r.original_line}  "${r.preview}"`));
   } else if (d.mode === 'zip') {
     const totalRemoved = (d.duplicate_files||0) + (d.subset_count||0);
     lines.push(`Total files    : ${d.total_files}`, `Unique kept    : ${d.unique_files}`, `Exact dups     : ${d.duplicate_files||0}`, `Subset removed : ${d.subset_count||0}`, `Total removed  : ${totalRemoved}`, `Space saved    : ${d.wasted_fmt||'0 B'}`, '');
