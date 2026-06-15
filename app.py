@@ -12,6 +12,8 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 import pandas as pd
 from pypdf import PdfReader, PdfWriter
+from docx import Document as DocxDocument
+from docx.oxml.ns import qn
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1 GB
@@ -65,6 +67,164 @@ def set_progress(sid, pct, label, done=False, error=None):
 
 EXCEL_EXTS = {'.xlsx', '.xls', '.xlsm', '.csv'}
 PDF_EXTS   = {'.pdf'}
+DOCX_EXTS  = {'.docx', '.doc'}
+TXT_EXTS   = {'.txt', '.text', '.md', '.log'}
+
+
+# ── Paragraph-level text extraction for DOCX ─────────────────────────────────
+
+def extract_docx_paragraphs(file_bytes: bytes, filename: str) -> list:
+    """
+    Splits a DOCX into paragraphs (non-empty). Each paragraph becomes one
+    chunk, fingerprinted with content_hash(normalised text).
+    """
+    chunks = []
+    try:
+        doc = DocxDocument(io.BytesIO(file_bytes))
+        for i, para in enumerate(doc.paragraphs):
+            text = para.text.strip()
+            if not text:
+                continue
+            chunks.append({
+                'source': filename,
+                'type':   'docx',
+                'label':  f"Para {i+1}",
+                'text':   text,
+                'hash':   content_hash(text),
+            })
+    except Exception:
+        pass
+    return chunks
+
+
+def extract_txt_lines(file_bytes: bytes, filename: str) -> list:
+    """
+    Splits a plain-text file into non-empty lines. Each line is one chunk.
+    Tries UTF-8 first, falls back to latin-1.
+    """
+    chunks = []
+    try:
+        try:
+            text = file_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            text = file_bytes.decode('latin-1', errors='replace')
+        for i, line in enumerate(text.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            chunks.append({
+                'source': filename,
+                'type':   'txt',
+                'label':  f"Line {i+1}",
+                'text':   line,
+                'hash':   content_hash(line),
+            })
+    except Exception:
+        pass
+    return chunks
+
+
+# ── Single-file processors for DOCX and TXT ──────────────────────────────────
+
+def process_docx(file_bytes: bytes, filename: str) -> dict:
+    """
+    Deduplicate paragraphs inside a single DOCX file.
+    Removes duplicate paragraphs (keeping first occurrence) and returns
+    a cleaned DOCX where duplicate paragraphs are deleted.
+    """
+    try:
+        doc = DocxDocument(io.BytesIO(file_bytes))
+    except Exception as e:
+        raise ValueError(f"Cannot open DOCX: {e}")
+
+    seen      = {}
+    dup_details = []
+    paras_to_remove = []
+
+    for i, para in enumerate(doc.paragraphs):
+        text = para.text.strip()
+        if not text:
+            continue
+        h = content_hash(text)
+        if h not in seen:
+            seen[h] = i + 1
+        else:
+            dup_details.append({'duplicate_para': i + 1, 'original_para': seen[h],
+                                 'preview': text[:80]})
+            paras_to_remove.append(para)
+
+    # Remove duplicate paragraphs from the XML tree
+    for para in paras_to_remove:
+        p = para._element
+        p.getparent().remove(p)
+
+    out = io.BytesIO()
+    doc.save(out)
+    clean_bytes = out.getvalue()
+
+    total = len([p for p in DocxDocument(io.BytesIO(file_bytes)).paragraphs if p.text.strip()])
+    kept  = total - len(dup_details)
+
+    return {
+        'mode':            'docx',
+        'filename':        filename,
+        'total_paras':     total,
+        'kept_paras':      kept,
+        'duplicate_paras': len(dup_details),
+        'dup_details':     dup_details,
+        'original_size':   len(file_bytes),
+        'clean_size':      len(clean_bytes),
+        'clean_bytes':     clean_bytes,
+        'download_name':   Path(filename).stem + '_clean.docx',
+        'mime':            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }
+
+
+def process_txt(file_bytes: bytes, filename: str) -> dict:
+    """
+    Deduplicate lines inside a single TXT/MD/LOG file.
+    Removes duplicate lines (keeping first occurrence).
+    """
+    try:
+        try:
+            text = file_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            text = file_bytes.decode('latin-1', errors='replace')
+    except Exception as e:
+        raise ValueError(f"Cannot read text file: {e}")
+
+    lines = text.splitlines()
+    seen, kept_lines, dup_details = {}, [], []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            kept_lines.append(line)   # preserve blank lines
+            continue
+        h = content_hash(stripped)
+        if h not in seen:
+            seen[h] = i + 1
+            kept_lines.append(line)
+        else:
+            dup_details.append({'duplicate_line': i + 1, 'original_line': seen[h],
+                                 'preview': stripped[:80]})
+
+    clean_bytes = '\n'.join(kept_lines).encode('utf-8')
+    ext         = Path(filename).suffix.lower()
+
+    return {
+        'mode':            'txt',
+        'filename':        filename,
+        'total_lines':     len([l for l in lines if l.strip()]),
+        'kept_lines':      len([l for l in kept_lines if l.strip()]),
+        'duplicate_lines': len(dup_details),
+        'dup_details':     dup_details,
+        'original_size':   len(file_bytes),
+        'clean_size':      len(clean_bytes),
+        'clean_bytes':     clean_bytes,
+        'download_name':   Path(filename).stem + '_clean' + ext,
+        'mime':            'text/plain',
+    }
 
 def extract_pdf_chunks(file_bytes: bytes, filename: str) -> list:
     chunks = []
@@ -85,6 +245,35 @@ def extract_pdf_chunks(file_bytes: bytes, filename: str) -> list:
         pass
     return chunks
 
+def _normalise_cell(v) -> str:
+    """
+    Normalise one cell value. Converts whole-number floats like 1.0 → '1'
+    so int64 vs float64 dtype differences between Excel exports don't
+    cause false fingerprint mismatches.
+    """
+    try:
+        f = float(str(v).strip())
+        v = str(int(f)) if f == int(f) else str(f)
+    except (ValueError, TypeError):
+        pass
+    return normalise_text(str(v))
+
+
+def _row_fp(row) -> str:
+    """
+    Column-order-independent row fingerprint.
+    Sorts normalised cell values so column order differences between
+    files don't cause false misses. Also handles int vs float dtype
+    differences via _normalise_cell().
+    """
+    cells = sorted(
+        _normalise_cell(v)
+        for v in row.fillna('').tolist()
+        if _normalise_cell(v)
+    )
+    return hashlib.sha256(' | '.join(cells).encode('utf-8', errors='replace')).hexdigest()
+
+
 def extract_excel_chunks(file_bytes: bytes, filename: str) -> list:
     ext = Path(filename).suffix.lower()
     chunks = []
@@ -96,17 +285,21 @@ def extract_excel_chunks(file_bytes: bytes, filename: str) -> list:
             sheets = {s: xf.parse(s) for s in xf.sheet_names}
         for sheet, df in sheets.items():
             for i, (_, row) in enumerate(df.iterrows()):
-                raw = ' '.join(str(v) for v in row.fillna('').astype(str).tolist())
-                if raw.strip():
-                    chunks.append({
-                        'source':  filename,
-                        'type':    'excel',
-                        'sheet':   sheet,
-                        'label':   f"Row {i+2}",
-                        'row_idx': i,
-                        'text':    raw,
-                        'hash':    content_hash(raw),
-                    })
+                normalised = ' '.join(_normalise_cell(v) for v in row.fillna('').tolist())
+                normalised = normalise_text(normalised)
+                if not normalised:
+                    continue
+                    continue
+                chunks.append({
+                    'source':  filename,
+                    'type':    'excel',
+                    'sheet':   sheet,
+                    'label':   f"Row {i+2}",
+                    'row_idx': i,
+                    'text':    normalised,
+                    # Use sorted-cell fp so subset detection is column-order independent
+                    'hash':    _row_fp(row),
+                })
     except Exception:
         pass
     return chunks
@@ -248,6 +441,10 @@ def _extract_chunks(args):
             chunks = extract_pdf_chunks(data, fname)
         elif ext in EXCEL_EXTS:
             chunks = extract_excel_chunks(data, fname)
+        elif ext in DOCX_EXTS:
+            chunks = extract_docx_paragraphs(data, fname)
+        elif ext in TXT_EXTS:
+            chunks = extract_txt_lines(data, fname)
         else:
             chunks = []
     except Exception:
@@ -266,31 +463,51 @@ def _build_zip_parallel(entries_and_data, compression=zipfile.ZIP_DEFLATED):
 
 def _detect_subset_files(file_chunks: dict) -> dict:
     """
-    Returns {subset_path: superset_path} for every file whose entire
-    content-hash set is contained within another file's content-hash set.
-    Files with zero chunks are never marked as subsets.
+    Returns {subset_path: superset_path} for every file whose entire row/page
+    content exists inside another file.
+
+    For Excel: uses _row_fp (sorted cell values) so column-order differences
+    don't cause false misses.
+    For PDF: uses content_hash(normalised page text).
+
+    File A is a subset of File B when:
+      - every fingerprint in A also appears in B
+      - B has strictly more fingerprints than A
     """
-    # Build hash-set per file (only files that have extractable content)
-    hash_sets = {
-        fname: set(c['hash'] for c in chunks)
-        for fname, chunks in file_chunks.items()
-        if chunks
-    }
+    # Build fingerprint-set per file directly from chunk hashes
+    # (already computed by extract_excel_chunks / extract_pdf_chunks)
+    hash_sets: dict[str, set] = {}
+    for fname, chunks in file_chunks.items():
+        if not chunks:
+            continue
+        fps = set(c['hash'] for c in chunks if c.get('hash'))
+        if fps:
+            hash_sets[fname] = fps
 
-    # Sort by set size ascending so smaller files are checked first
+    if len(hash_sets) < 2:
+        return {}
+
+    # Sort ascending by set size so smaller files are tested first
     ordered = sorted(hash_sets.items(), key=lambda x: len(x[1]))
-    subset_map = {}   # subset_path -> superset_path
-    seen = list(ordered)
+    names = [f for f, _ in ordered]
+    sets  = [s for _, s in ordered]
 
-    for i, (fname_a, hashes_a) in enumerate(ordered):
+    subset_map: dict[str, str] = {}   # subset_path -> superset_path
+
+    for i in range(len(ordered)):
+        fname_a, fps_a = names[i], sets[i]
         if fname_a in subset_map:
-            continue   # already marked as a subset
-        for fname_b, hashes_b in seen:
-            if fname_b == fname_a or fname_b in subset_map:
+            continue   # already marked, skip
+
+        for j in range(len(ordered)):
+            if i == j:
                 continue
-            if len(hashes_b) <= len(hashes_a):
-                continue   # B is not strictly larger
-            if hashes_a <= hashes_b:   # A ⊆ B
+            fname_b, fps_b = names[j], sets[j]
+            if fname_b in subset_map:
+                continue   # don't use an already-removed file as superset
+            if len(fps_b) <= len(fps_a):
+                continue   # B must be strictly larger
+            if fps_a <= fps_b:   # every row/page of A exists in B → A ⊆ B
                 subset_map[fname_a] = fname_b
                 break
 
@@ -354,9 +571,10 @@ def process_zip_worker(sid: str, file_bytes: bytes, filename: str):
             f'Pass 1 done — {len(exact_dups)} exact duplicate(s). Extracting content…')
 
         # ── Pass 2: parallel content extraction + cross-file chunk dedup ──────
+        CONTENT_EXTS = PDF_EXTS | EXCEL_EXTS | DOCX_EXTS | TXT_EXTS
         processable = [
             e for e in entries
-            if Path(e.filename).suffix.lower() in (PDF_EXTS | EXCEL_EXTS)
+            if Path(e.filename).suffix.lower() in CONTENT_EXTS
                and e.filename in keep_paths   # skip already-duped files
         ]
         proc_total   = len(processable)
@@ -501,9 +719,12 @@ def api_process():
         'pdf':  process_pdf,
         'xlsx': process_excel, 'xls': process_excel,
         'xlsm': process_excel, 'csv': process_excel,
+        'docx': process_docx, 'doc': process_docx,
+        'txt':  process_txt,  'text': process_txt,
+        'md':   process_txt,  'log':  process_txt,
     }
     if ext not in SUPPORTED:
-        return jsonify({'error': f'Unsupported type ".{ext}". Use ZIP mode for zip files.'}), 400
+        return jsonify({'error': f'Unsupported type ".{ext}". Supported: PDF, Excel, CSV, DOCX, TXT, MD, LOG. Use ZIP mode for multiple files.'}), 400
 
     try:
         result = SUPPORTED[ext](data, filename)
