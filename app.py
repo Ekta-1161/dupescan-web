@@ -8,7 +8,12 @@ import time
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from pathlib import Path
+from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
+import pandas as pd
+from pypdf import PdfReader, PdfWriter
+from docx import Document as DocxDocument
+from docx.oxml.ns import qn
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1 GB
