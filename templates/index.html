@@ -88,10 +88,10 @@ h1 em{font-style:normal;color:var(--muted);font-weight:400}
 .stat.ok    {border-color:rgba(21,128,61,.3);background:#f0fdf4}
 .stat.amber {border-color:rgba(180,83,9,.3);background:#fffbeb}
 .stat-label{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem}
-.stat-val{font-family:var(--syne);font-size:24px;font-weight:800;line-height:1.1;word-break:break-word}
+.stat-val{font-family:'Times New Roman',Times,serif;font-size:24px;font-weight:800;line-height:1.1;word-break:break-word}
 .stat.danger .stat-val{color:var(--red)}
 .stat.ok .stat-val{color:var(--green)}
-.stat.amber .stat-val{color:var(--amber);font-size:15px}
+.stat.amber .stat-val{color:var(--amber);font-family:'Times New Roman',Times,serif;font-size:15px}
 
 /* Download grid */
 .dl-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:1.5rem}
@@ -197,7 +197,7 @@ tr:hover td{background:var(--a2)}
   </div>
   <div class="mode-card" onclick="selectMode('txt')" id="mode-txt">
     <div class="mode-icon">🗒️</div>
-    <div class="mode-title">TXT</div>
+    <div class="mode-title">TXT / MD / LOG</div>
     <div class="mode-desc">Removes duplicate lines inside a plain-text file. Downloads a clean file.</div>
     <span class="mode-tag">Duplicate lines</span>
   </div>
@@ -222,7 +222,7 @@ tr:hover td{background:var(--a2)}
     <input type="file" id="fileIn" accept=".pdf">
     <!-- folder input — shown only in ZIP mode -->
     <input type="file" id="folderIn" webkitdirectory multiple style="display:none">
-    <div class="upload-note" id="uploadNote">Max 1 GB</div>
+    <div class="upload-note" id="uploadNote">Runs on your computer · No internet needed · Max 1 GB</div>
   </div>
   <div class="prog-wrap" id="progWrap">
     <div class="prog-labels"><span id="progLabel">Processing…</span><span id="progPct">0%</span></div>
@@ -268,7 +268,7 @@ const modeConfig = {
   txt: {
     icon: '🗒️', title: 'Drop your text file here',
     sub: 'Upload a TXT, MD, or LOG file to remove duplicate lines.\nProcessed locally — files never leave your computer.',
-    btnLabel: 'Choose TXT file', accept: '.txt,.text,.md,.log'
+    btnLabel: 'Choose TXT / MD / LOG file', accept: '.txt,.text,.md,.log'
   },
   zip: {
     icon: '📁', title: 'Drop a folder or ZIP here',
